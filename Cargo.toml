@@ -1,5 +1,7 @@
 [workspace]
 
+resolver = "2"
+
 members = [
         "exercises/02_lifetimes_explained/exercise",
         "exercises/02_lifetimes_explained/solutions",
