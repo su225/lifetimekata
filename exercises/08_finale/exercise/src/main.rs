@@ -34,7 +34,10 @@ impl<'s> MatcherToken<'s> {
                     Option::None
                 }
             },
-            MatcherToken::WildCard if !input.is_empty() => Option::Some(&input[..1]),
+            MatcherToken::WildCard if !input.is_empty() => {
+                let first_char = input.chars().next().unwrap();
+                Option::Some(&input[..first_char.len_utf8()])
+            },
             _ => Option::None,
         }
     }
@@ -80,7 +83,7 @@ impl<'p> PatternParser<'p> {
         let mut oneof_choices = vec![];
         let mut parse_mode = ParseMode::Standalone;
         let mut bytes_so_far = 0;
-        for (i, c) in self.pattern.char_indices() {
+        for c in self.pattern.chars() {
             if c == '.' {
                 if parse_mode == ParseMode::OneOf {
                     return Err(MatcherPatternParseError::WildcardInOneOf);
@@ -112,7 +115,7 @@ impl<'p> PatternParser<'p> {
                 oneof_choices.clear();
             } else {
                 if self.cur_tok_start.is_none() {
-                    self.cur_tok_start = Option::Some(i);
+                    self.cur_tok_start = Option::Some(bytes_so_far);
                 }
             }
             bytes_so_far += c.len_utf8();
@@ -193,14 +196,14 @@ mod test {
 
         {
             // Change 'e' to '💪' if you want to test unicode.
-            let candidate1 = "abcde".to_string();
+            let candidate1 = "abcd💪".to_string();
             let result = matcher.match_string(&candidate1);
             assert_eq!(
                 result,
                 vec![
                     (&MatcherToken::RawText("abc"), "abc"),
                     (&MatcherToken::OneOfText(vec!["d", "e", "f"]), "d"),
-                    (&MatcherToken::WildCard, "e"),
+                    (&MatcherToken::WildCard, "💪"),
                 ]
             );
             assert_eq!(matcher.most_tokens_matched, 3);
