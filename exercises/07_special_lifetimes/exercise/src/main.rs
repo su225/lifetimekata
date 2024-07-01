@@ -5,8 +5,8 @@ struct UniqueWords<'a> {
     unique_words: Vec<&'a str>,
 }
 
-impl<'a> UniqueWords<'a> {
-    fn new(sentence: &'a str) -> UniqueWords<'a> {
+impl UniqueWords<'_> {
+    fn new(sentence: &'_ str) -> UniqueWords<'_> {
         let unique_words = sentence
             .split(' ')
             .collect::<HashSet<_>>()
@@ -19,7 +19,7 @@ impl<'a> UniqueWords<'a> {
         }
     }
 
-    fn get_sorted_words<'b>(&'b self) -> Vec<&'a str> {
+    fn get_sorted_words(&'_ self) -> Vec<&'_ str> {
         let mut unique_words = self.unique_words.clone();
         unique_words.sort();
         unique_words
