@@ -1,41 +1,172 @@
+use std::cmp::max;
+
 use require_lifetimes::require_lifetimes;
 
 #[derive(Debug, PartialEq, Eq)]
-enum MatcherToken {
+enum MatcherToken<'s> {
     /// This is just text without anything special.
-    RawText(&str),
+    RawText(&'s str),
     /// This is when text could be any one of multiple
     /// strings. It looks like `(one|two|three)`, where
     /// `one`, `two` or `three` are the allowed strings.
-    OneOfText(Vec<&str>),
+    OneOfText(Vec<&'s str>),
     /// This is when you're happy to accept any single character.
     /// It looks like `.`
     WildCard,
 }
 
+impl<'s> MatcherToken<'s> {
+    fn match_string<'x>(&self, input: &'x str) -> Option<&'x str> {
+        match self {
+            MatcherToken::RawText(ref text_to_match) if input.starts_with(text_to_match) =>
+                    Option::Some(&input[..text_to_match.len()]),
+
+            MatcherToken::OneOfText(ref choices) => {
+                let mut longest_match = 0;
+                for &ch in choices.iter() {
+                    if input.starts_with(ch) && ch.len() > longest_match {
+                        longest_match = ch.len();
+                    }
+                }
+                if longest_match > 0 {
+                    Option::Some(&input[..longest_match])
+                } else {
+                    Option::None
+                }
+            },
+            MatcherToken::WildCard if !input.is_empty() => Option::Some(&input[..1]),
+            _ => Option::None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-struct Matcher {
+struct Matcher<'s> {
     /// This is the actual text of the matcher
-    text: &str,
+    text: &'s str,
     /// This is a vector of the tokens inside the expression.
-    tokens: Vec<MatcherToken>,
+    tokens: Vec<MatcherToken<'s>>,
     /// This keeps track of the most tokens that this matcher has matched.
     most_tokens_matched: usize,
 }
 
-impl Matcher {
+#[derive(Debug)]
+enum MatcherPatternParseError {
+    WildcardInOneOf,
+    RecursiveOneOf,
+    PipeNotAllowedInStandalone,
+    ClosingParenInStandalone,
+    Incomplete,
+}
+
+#[derive(Eq, PartialEq)]
+enum ParseMode {
+    Standalone,
+    OneOf,
+}
+
+struct PatternParser<'p> {
+    pattern: &'p str,
+    cur_tok_start: Option<usize>,
+}
+
+impl<'p> PatternParser<'p> {
+    pub fn new(pattern: &'p str) -> Self {
+        PatternParser { pattern: pattern, cur_tok_start: Option::None }
+    }
+
+    pub fn parse_into(mut self) -> Result<Vec<MatcherToken<'p>>, MatcherPatternParseError> {
+        let mut mat_toks = vec![];
+        let mut oneof_choices = vec![];
+        let mut parse_mode = ParseMode::Standalone;
+        let mut bytes_so_far = 0;
+        for (i, c) in self.pattern.char_indices() {
+            if c == '.' {
+                if parse_mode == ParseMode::OneOf {
+                    return Err(MatcherPatternParseError::WildcardInOneOf);
+                }
+                self.maybe_extract_token(bytes_so_far)
+                    .map(|tok| mat_toks.push(MatcherToken::RawText(tok)));
+                mat_toks.push(MatcherToken::WildCard);
+            } else if c == '(' {
+                if parse_mode == ParseMode::OneOf {
+                    return Err(MatcherPatternParseError::RecursiveOneOf);
+                }
+                self.maybe_extract_token(bytes_so_far)
+                    .map(|tok| mat_toks.push(MatcherToken::RawText(tok)));
+                parse_mode = ParseMode::OneOf;
+            } else if c == '|' {
+                if parse_mode == ParseMode::Standalone {
+                    return Err(MatcherPatternParseError::PipeNotAllowedInStandalone);
+                }
+                self.maybe_extract_token(bytes_so_far)
+                    .map(|tok| oneof_choices.push(tok));
+            } else if c == ')' {
+                if parse_mode == ParseMode::Standalone {
+                    return Err(MatcherPatternParseError::ClosingParenInStandalone);
+                }
+                self.maybe_extract_token(bytes_so_far)
+                    .map(|tok| oneof_choices.push(tok));
+                parse_mode = ParseMode::Standalone;
+                mat_toks.push(MatcherToken::OneOfText(oneof_choices.clone()));
+                oneof_choices.clear();
+            } else {
+                if self.cur_tok_start.is_none() {
+                    self.cur_tok_start = Option::Some(i);
+                }
+            }
+            bytes_so_far += c.len_utf8();
+        }
+        if parse_mode == ParseMode::OneOf {
+            return Err(MatcherPatternParseError::Incomplete)
+        }
+        self.maybe_extract_token(bytes_so_far)
+            .map(|tok| mat_toks.push(MatcherToken::RawText(tok)));
+        return Ok(mat_toks);
+    }
+
+    fn maybe_extract_token(&mut self, end_idx: usize) -> Option<&'p str> {
+        let res = if end_idx == 0 {
+            Option::None
+        } else if let Option::Some(start_idx) = self.cur_tok_start {
+            Option::Some(&self.pattern[start_idx..end_idx])
+        } else {
+            Option::None
+        };
+        self.cur_tok_start = Option::None;
+        res
+    }
+}
+
+impl<'s> Matcher<'s> {
     /// This should take a string reference, and return
     /// an `Matcher` which has parsed that reference.
     #[require_lifetimes]
-    fn new(text: &str) -> Option<Matcher> {
-        todo!()
+    fn new(text: &'s str) -> Option<Matcher<'s>> {
+        let pattern = PatternParser::new(&text).parse_into();
+        println!("{pattern:?}");
+        pattern.ok().map(|tokens| Matcher {
+            text,
+            tokens,
+            most_tokens_matched: 0,
+        })
     }
 
     /// This should take a string, and return a vector of tokens, and the corresponding part
     /// of the given string. For examples, see the test cases below.
-    #[require_lifetimes]
-    fn match_string(&mut self, string: &str) -> Vec<(&MatcherToken, &str)> {
-        todo!()
+    fn match_string<'m>(&mut self, string: &'m str) -> Vec<(&MatcherToken, &'m str)> {
+        let mut matched_till = 0;
+        let mut match_result = vec![];
+        for tok in self.tokens.iter() {
+            if let Some(matched) = tok.match_string(&string[matched_till..]) {
+                matched_till += matched.len();
+                match_result.push((tok, matched))
+            } else {
+                break;
+            }
+        }
+        self.most_tokens_matched = max(self.most_tokens_matched, match_result.len());
+        match_result
     }
 }
 
@@ -69,7 +200,7 @@ mod test {
                 vec![
                     (&MatcherToken::RawText("abc"), "abc"),
                     (&MatcherToken::OneOfText(vec!["d", "e", "f"]), "d"),
-                    (&MatcherToken::WildCard, "e") // or '💪'
+                    (&MatcherToken::WildCard, "e"),
                 ]
             );
             assert_eq!(matcher.most_tokens_matched, 3);
